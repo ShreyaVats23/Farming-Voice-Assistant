@@ -31,7 +31,11 @@ The assistant understands voice inputs, processes queries using AI, and provides
 ---
 
 
-Uploading WhatsApp Video 2025-09-01 at 20.58.58.mp4…
+https://github.com/user-attachments/assets/0ae36918-050e-4edd-ad10-762337bb74c6
+
+
+
+
 
 
 
