@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Farm Assistant</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html,body{height:100%}
+    body{background:#fafafa}
+    .card{box-shadow:0 10px 24px rgb(211, 252, 197)}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}
+    .mic-wrap{position:relative}
+    .mic-wrap .ring{position:absolute;inset:0;border-radius:9999px;border:2px solid rgb(28, 155, 16);opacity:0;transform:scale(.9)}
+    .mic-wrap.listening .ring{animation:pulse 1.6s ease-out infinite;opacity:1}
+    .mic-wrap .ring.r2{inset:-12px}
+    .mic-wrap .ring.r3{inset:-24px}
+    @keyframes pulse{0%{transform:scale(.9);opacity:.8}70%{transform:scale(1.25);opacity:0}100%{transform:scale(.9);opacity:0}}
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm min-h-[640px] bg-white rounded-[1.5rem] border border-neutral-200 card relative overflow-hidden">
+    <header class="px-5 pt-5 pb-3 text-center border-b border-neutral-100">
+      <h1 class="text-base font-semibold text-neutral-900">Farm Assistant</h1>
+    </header>
+
+    <main class="px-5 pt-4 pb-36 flex flex-col gap-3">
+      <div class="bg-neutral-100 rounded-lg p-3">
+        <div class="text-[10px] font-semibold text-neutral-600">You</div>
+        <div id="userText" class="text-sm text-neutral-900 min-h-[1.2rem]"></div>
+      </div>
+      <div class="bg-white rounded-lg p-3 border border-neutral-200">
+        <div class="text-[10px] font-semibold text-neutral-600">Assistant</div>
+        <div id="botReply" class="text-sm text-neutral-900 min-h-[1.2rem]"></div>
+      </div>
+      <div id="status" class="text-[11px] text-neutral-600" role="status" aria-live="polite"></div>
+    </main>
+
+    <div class="absolute left-0 right-0 bottom-24 px-4">
+      <div class="flex items-center gap-2 bg-white border border-neutral-200 rounded-full px-3 py-2">
+        <label for="textInput" class="sr-only">Type</label>
+        <input id="textInput" type="text" placeholder="अपना प्रश्न लिखें…" class="flex-1 bg-transparent focus:outline-none text-sm text-neutral-900 placeholder:text-neutral-500" />
+        <button id="sendBtn" class="px-3 py-2 rounded-full bg-neutral-900 text-white text-sm hover:opacity-90 active:scale-95">Send</button>
+      </div>
+      <div class="flex items-center justify-between mt-2 px-1">
+        <div class="text-[11px] text-neutral-500">भाषा: <span id="langBadge">हिंदी</span></div>
+        <button id="toggleLang" class="text-[11px] text-neutral-600 underline">English/Hindi</button>
+      </div>
+    </div>
+
+    <!-- Mic centered at bottom -->
+    <div class="fixed inset-x-0 bottom-6 flex justify-center">
+      <div id="micWrap" class="mic-wrap">
+        <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+        <button id="micBtn" class="relative w-16 h-16 rounded-full bg-neutral-900 text-white grid place-items-center text-2xl shadow-lg hover:opacity-90 active:scale-95" title="Tap to speak">🎤</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ====== CONFIG ======
+    const API_BASE = 'http://localhost:8787'; // set to your server origin
+    const SYSTEM_SHORT_HINT_HI = 'उत्तर 1–3 वाक्यों में, 40 शब्दों से कम रखें।';
+    const SYSTEM_SHORT_HINT_EN = 'Answer in 1–3 sentences under 40 words.';
+
+    // ====== State & elements ======
+    let currentLang = 'hi-IN';
+    const micWrap = document.getElementById('micWrap');
+    const micBtn = document.getElementById('micBtn');
+    const sendBtn = document.getElementById('sendBtn');
+    const textInput = document.getElementById('textInput');
+    const userText = document.getElementById('userText');
+    const botReply = document.getElementById('botReply');
+    const statusEl = document.getElementById('status');
+    const toggleLangBtn = document.getElementById('toggleLang');
+    const langBadge = document.getElementById('langBadge');
+
+    // ====== TTS ======
+    function getVoiceForLang(langCode){
+      const voices = speechSynthesis.getVoices();
+      return voices.find(v => v.lang && v.lang.toLowerCase().startsWith(langCode.split('-')[0])) ||
+             voices.find(v => /hindi|हिंदी|india/i.test(`${v.name} ${v.lang}`)) ||
+             voices[0] || null;
+    }
+    function speak(text){
+      if (!('speechSynthesis' in window)) return;
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = currentLang;
+      const v = getVoiceForLang(currentLang);
+      if (v) utter.voice = v;
+      speechSynthesis.cancel();
+      if (speechSynthesis.getVoices().length === 0) {
+        speechSynthesis.onvoiceschanged = () => speechSynthesis.speak(utter);
+      } else {
+        speechSynthesis.speak(utter);
+      }
+    }
+
+    // ====== ASR ======
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null, listening = false;
+    if (SR) {
+      recognition = new SR();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = currentLang;
+    } else {
+      statusEl.textContent = 'SpeechRecognition not supported. Use Chrome/Edge.';
+      micBtn.disabled = true;
+    }
+    function setListening(on){
+      listening = on;
+      micWrap.classList.toggle('listening', on);
+      micBtn.textContent = on ? '⏺️' : '🎤';
+    }
+
+    // ====== Backend calls ======
+    async function askBackend(prompt){
+      const resp = await fetch(`${API_BASE}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Add a short-answer hint in the user prompt to reinforce brevity + Hindi
+        body: JSON.stringify({ prompt: getPromptWithLangHint(prompt) })
+      });
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`Backend ${resp.status}: ${body}`);
+      }
+      const data = await resp.json();
+      return data.text;
+    }
+
+    async function askBackendStream(prompt, onChunk){
+      const resp = await fetch(`${API_BASE}/ask-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: getPromptWithLangHint(prompt) })
+      });
+      if (!resp.ok || !resp.body) throw new Error('Streaming not available');
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      while (true){
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        onChunk?.(chunk);
+      }
+    }
+
+    function getPromptWithLangHint(p){
+      // Push the model to answer in the selected language and briefly
+      const hint = currentLang.startsWith('hi') ? `(उत्तर हिंदी में दें) ${SYSTEM_SHORT_HINT_HI}` : `(Answer in English) ${SYSTEM_SHORT_HINT_EN}`;
+      return `${hint}\n\n${p}`;
+    }
+
+    async function handlePrompt(prompt){
+      if (!prompt) return;
+      userText.textContent = prompt;
+      botReply.textContent = '';
+      statusEl.textContent = currentLang.startsWith('hi') ? 'सोच रहा हूँ…' : 'Thinking…';
+      try {
+        let full = '';
+        try {
+          await askBackendStream(prompt, c => { botReply.textContent += c; });
+          full = botReply.textContent;
+        } catch {
+          const reply = await askBackend(prompt);
+          botReply.textContent = reply; full = reply;
+        }
+        statusEl.textContent = currentLang.startsWith('hi') ? 'बोल रहा हूँ…' : 'Speaking…';
+        speak(full);
+        statusEl.textContent = currentLang.startsWith('hi') ? 'तैयार' : 'Ready';
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = currentLang.startsWith('hi') ? 'सर्वर से संपर्क में त्रुटि।' : 'Error contacting server.';
+        botReply.textContent = e.message || 'Client error';
+      }
+    }
+
+    // ====== Events ======
+    sendBtn.addEventListener('click', ()=> handlePrompt(textInput.value.trim()));
+    textInput.addEventListener('keydown', e => { if (e.key === 'Enter') handlePrompt(textInput.value.trim()); });
+
+    if (recognition){
+      recognition.onstart = ()=>{ statusEl.textContent = currentLang.startsWith('hi') ? 'सुन रहा हूँ…' : 'Listening…'; setListening(true); };
+      recognition.onerror = e => { statusEl.textContent = `Mic error: ${e.error}`; setListening(false); };
+      recognition.onend = ()=>{ statusEl.textContent = currentLang.startsWith('hi') ? 'प्रोसेस कर रहा हूँ…' : 'Processing…'; setListening(false); };
+      recognition.onresult = async ev => {
+        const transcript = ev.results[0][0].transcript.trim();
+        textInput.value = '';
+        await handlePrompt(transcript);
+      };
+      micBtn.addEventListener('click', ()=>{ if (!listening) recognition.start(); });
+    } else {
+      micBtn.addEventListener('click', ()=> textInput.focus());
+    }
+
+    toggleLangBtn.addEventListener('click', ()=>{
+      currentLang = currentLang.startsWith('hi') ? 'en-GB' : 'hi-IN';
+      langBadge.textContent = currentLang.startsWith('hi') ? 'हिंदी' : 'English';
+      if (recognition) recognition.lang = currentLang;
+      statusEl.textContent = currentLang.startsWith('hi') ? 'भाषा: हिंदी' : 'Language: English';
+    });
+  </script>
+</body>
+</html>
